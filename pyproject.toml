@@ -5,6 +5,8 @@ requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
+    "numpy>=1.26",
+    "nibabel>=5.2",
 ]
 
 [build-system]
