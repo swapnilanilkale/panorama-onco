@@ -62,9 +62,10 @@ class MultiStreamViT(nn.Module):
 
         self.norm = nn.LayerNorm(embed_dim)
 
-    def forward(self, image: torch.Tensor,
-                modality_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        tokens = self.embed(image, modality_mask)             # [B, S, N, E]
+
+    def forward(self, image: torch.Tensor, modality_mask: torch.Tensor,
+                token_mask: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+        tokens = self.embed(image, modality_mask, token_mask)     # [B, S, N, E]
         streams = [tokens[:, i] for i in range(len(self.streams))]
 
         pet_present = modality_mask[:, self.metab_idx].amax(dim=1)

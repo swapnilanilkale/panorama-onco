@@ -41,10 +41,15 @@ class MultiStreamPatchEmbed(nn.Module):
         # Substituted wholesale for an absent stream.
         self.missing_token = nn.Parameter(torch.zeros(embed_dim))
 
-        for p in (self.pos_embed, self.modality_embed, self.missing_token):
+        # Placeholder for tokens hidden by MAE masking.
+        self.mask_token = nn.Parameter(torch.zeros(embed_dim))
+
+        for p in (self.pos_embed, self.modality_embed, self.missing_token, self.mask_token):
             nn.init.trunc_normal_(p, std=0.02)
 
-    def forward(self, image: torch.Tensor, modality_mask: torch.Tensor) -> torch.Tensor:
+    
+
+    def forward(self, image: torch.Tensor, modality_mask: torch.Tensor, token_mask: torch.Tensor | None = None) -> torch.Tensor:
         if image.shape[1] != len(self.streams):
             raise ModelBuildError(
                 f"expected {len(self.streams)} channels (CT,MRI,PET), got {image.shape[1]}"
@@ -60,6 +65,11 @@ class MultiStreamPatchEmbed(nn.Module):
         # Replace absent streams with the learnable missing token.
         present = modality_mask.view(b, len(self.streams), 1, 1)
         tokens = present * tokens + (1.0 - present) * self.missing_token
+
+        # Hide masked tokens BEFORE positional embeddings are added, so the
+        # model still knows WHERE the hidden content is.
+        if token_mask is not None:
+            tokens = torch.where(token_mask.unsqueeze(-1), self.mask_token, tokens)
 
         # Where am I (shared) + what am I (per-stream).
         tokens = tokens + self.pos_embed + self.modality_embed
