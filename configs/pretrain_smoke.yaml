@@ -1,0 +1,43 @@
+# CPU smoke run: proves the whole pipeline composes. Not a real experiment.
+seed: 1337
+output_dir: outputs/smoke
+
+data:
+  manifest_path: data/synthetic/manifests/cohort.csv
+  data_root: data/synthetic/raw
+  crop_size: [32, 32, 32]        
+  target_spacing: [2.0, 2.0, 2.0]
+  batch_size: 2
+  num_workers: 0
+  patches_per_study: 4
+  fg_threshold: 0.3
+  val_fraction: 0.2
+  test_fraction: 0.1
+
+model:
+  volume_shape: [32, 32, 32]
+  patch_size: 8              
+  embed_dim: 128             
+  depth: 4
+  num_heads: 8
+  fusion_every: 2
+  share_stream_weights: true
+  mask_ratio: 0.75
+  decoder_dim: 128           
+  decoder_depth: 2           
+  decoder_heads: 4
+  norm_pix_loss: true
+  base_lr: 1.0e-3
+  weight_decay: 0.05
+  warmup_steps: 40           # was 20
+  max_steps: 1500            # was 300
+
+trainer:
+  max_steps: 1500            # keep in sync (the validator enforces this)
+  accelerator: cpu
+  devices: 1
+  precision: 32
+  accumulate_grad_batches: 1
+  gradient_clip_val: 1.0
+  val_check_interval: 30
+  log_every_n_steps: 10

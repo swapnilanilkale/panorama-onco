@@ -23,7 +23,7 @@ class PanoramaDataModule(L.LightningDataModule):
     def __init__(self,
                  manifest_path: Path | str,
                  data_root: Path | str,
-                 patch_size: tuple[int, int, int] = DEFAULT_PATCH,
+                 crop_size: tuple[int, int, int] = DEFAULT_PATCH,
                  target_spacing: tuple[float, float, float] = DEFAULT_SPACING_MM,
                  batch_size: int = 2,
                  num_workers: int = 0,
@@ -34,9 +34,15 @@ class PanoramaDataModule(L.LightningDataModule):
                  seed: int = 1337,
                  split_file: Path | str | None = None) -> None:
         super().__init__()
+        # Store paths as STRINGS: keeps checkpoints loadable with the safe
+        # weights_only=True default, and portable between Windows and Linux.
+        manifest_path = str(manifest_path)
+        data_root = str(data_root)
+        split_file = str(split_file) if split_file is not None else None
         self.save_hyperparameters()
         self.split: CohortSplit | None = None
         self._datasets: dict[str, MultiModalPatchDataset] = {}
+
 
     # --------------------------------------------------------------- hooks
 
@@ -66,10 +72,12 @@ class PanoramaDataModule(L.LightningDataModule):
             seed=self.hparams.seed)
         log.info("cohort split:\n%s", self.split.summary())
 
-        common = dict(patch_size=self.hparams.patch_size,
+        common = dict(crop_size=self.hparams.crop_size,               
                       target_spacing=self.hparams.target_spacing,
                       seed=self.hparams.seed)
 
+        
+        
         self._datasets = {
             # Train: many random crops per study, biased toward foreground.
             "train": MultiModalPatchDataset(

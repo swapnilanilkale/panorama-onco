@@ -52,6 +52,13 @@ class MAEPretrainModule(L.LightningModule):
         out = self.model(batch["image"], batch["modality_mask"])
         loss = out["loss"]
         n = batch["image"].shape[0]
+        # With norm_pix_loss the trivial predictor (patch mean) scores MSE 1.0,
+        # so 1 - loss reads like R^2: 0 = learned nothing, 1 = perfect,
+        # negative = worse than a constant.
+        if self.hparams.norm_pix_loss:
+            self.log(f"{stage}/variance_explained", 1.0 - loss,
+                     prog_bar=(stage == "train"), on_step=False,
+                     on_epoch=True, batch_size=n)
         self.log(f"{stage}/loss", loss, prog_bar=(stage == "train"),
                  on_step=(stage == "train"), on_epoch=True, batch_size=n)
         self.log(f"{stage}/masked_tokens",

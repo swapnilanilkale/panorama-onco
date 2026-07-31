@@ -40,9 +40,9 @@ def validate_config(cfg: DictConfig) -> None:
         raise ConfigError(
             f"warmup_steps ({cfg.model.warmup_steps}) >= max_steps "
             f"({cfg.model.max_steps}): the LR would never decay.")
-    if tuple(cfg.data.patch_size) != tuple(cfg.model.volume_shape):
+    if tuple(cfg.data.crop_size) != tuple(cfg.model.volume_shape):
         raise ConfigError(
-            f"data.patch_size {list(cfg.data.patch_size)} != model.volume_shape "
+            f"data.crop_size {list(cfg.data.crop_size)} != model.volume_shape "
             f"{list(cfg.model.volume_shape)}: the encoder would compute the wrong "
             f"token count.")
     for name in ("base_lr", "weight_decay"):
@@ -52,10 +52,15 @@ def validate_config(cfg: DictConfig) -> None:
                 f"model.{name} is {value!r} ({type(value).__name__}), not a number. "
                 f"In YAML write 1.5e-4 (with a decimal point), never 3e-4.")
 
-
 def run(cfg: DictConfig) -> Path:
-    out_dir = Path(cfg.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime
+
+    # A unique directory per run: stale checkpoints can never be mistaken
+    # for current ones, and two runs never fight over `last.ckpt`.
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = Path(cfg.output_dir) / stamp
+    out_dir.mkdir(parents=True, exist_ok=False)
+    log.info("run directory: %s", out_dir)
 
     seed_everything(cfg.seed)
     revision = git_revision()
@@ -73,7 +78,7 @@ def run(cfg: DictConfig) -> Path:
         effective_batch_size=cfg.data.batch_size * cfg.trainer.accumulate_grad_batches)
 
     callbacks = [
-        ModelCheckpoint(dirpath=out_dir / "checkpoints", filename="step{step}-{val/loss:.4f}",
+        ModelCheckpoint(dirpath=out_dir / "checkpoints", filename="step{step:06d}",
                         monitor="val/loss", mode="min", save_top_k=3,
                         save_last=True, auto_insert_metric_name=False),
         LearningRateMonitor(logging_interval="step"),

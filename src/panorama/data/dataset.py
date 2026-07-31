@@ -29,17 +29,16 @@ def stack_modalities(patches: dict[Modality, np.ndarray],
 
 class MultiModalPatchDataset(Dataset):
     """Yields one multi-modal 3D patch per index, as model-ready tensors."""
-
     def __init__(self,
                  studies: Sequence[Study],
-                 patch_size=DEFAULT_PATCH,
+                 crop_size=DEFAULT_PATCH,                # was: patch_size
                  target_spacing=DEFAULT_SPACING_MM,
                  fg_threshold: float | None = None,
                  patches_per_study: int = 1,
                  seed: int = 1337,
                  cache_volumes: bool = True) -> None:
         self.studies = list(studies)
-        self.patch_size = tuple(patch_size)
+        self.crop_size = tuple(crop_size)               # was: self.patch_size
         self.target_spacing = tuple(target_spacing)
         self.fg_threshold = fg_threshold
         self.patches_per_study = patches_per_study
@@ -71,8 +70,9 @@ class MultiModalPatchDataset(Dataset):
         rng = np.random.default_rng((self.seed, self.epoch, idx))
 
         volumes = self._volumes(study)
-        patches, centre = sample_study_patch(volumes, rng, self.patch_size, self.fg_threshold)
-        image, mask = stack_modalities(patches, self.patch_size)
+        patches, centre = sample_study_patch(volumes, rng, self.crop_size, self.fg_threshold)
+        image, mask = stack_modalities(patches, self.crop_size)
+        
 
         return {
             "image": torch.from_numpy(image),          # [3, D, H, W]

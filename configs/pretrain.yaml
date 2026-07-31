@@ -8,7 +8,7 @@ output_dir: outputs/pretrain
 data:
   manifest_path: data/manifests/cohort.csv
   data_root: data/raw
-  patch_size: [96, 96, 96]
+  crop_size: [32, 32, 32]        
   target_spacing: [1.5, 1.5, 1.5]
   batch_size: 2
   num_workers: 2
@@ -30,10 +30,10 @@ model:
   decoder_depth: 2
   decoder_heads: 8
   norm_pix_loss: true
-  base_lr: 1.5e-4          # NOTE the decimal point -- see comment below
+  base_lr: 1.5e-4          
   weight_decay: 0.05
   warmup_steps: 1000
-  max_steps: 100000        # must match trainer.max_steps
+  max_steps: 100000        
 
 trainer:
   max_steps: 100000
