@@ -28,6 +28,33 @@ PATTERNS = ([Modality.CT, Modality.PET],                       # PET/CT staging
             [Modality.CT, Modality.MRI, Modality.PET])         # full tri-modal
 
 
+# Multiplicative lesion-size factors per timepoint, by clinical trajectory.
+# Chosen so the cohort contains all RECIST categories -- including a rebound
+# course whose progression only the nadir rule detects.
+TRAJECTORIES = {
+    "responder":  (1.00, 0.62, 0.55, 0.60),
+    "stable":     (1.00, 1.05, 0.97, 1.08),
+    "progressor": (1.00, 1.12, 1.35, 1.70),
+    "rebound":    (1.00, 0.58, 0.66, 0.95),
+}
+TRAJECTORY_NAMES = tuple(TRAJECTORIES)
+
+# Anatomical region by z position (mm). Bins must span the range that
+# `write_cohort` actually samples centres from, or some regions never occur.
+REGIONS = ((0.0, 35.0, "right lower lobe"),
+           (35.0, 50.0, "left hilum"),
+           (50.0, 65.0, "hepatic segment VII"),
+           (65.0, 1e9, "retroperitoneal node"))
+
+
+def _region_for(centre_mm) -> str:
+    z = float(centre_mm[2])
+    for lo, hi, name in REGIONS:
+        if lo <= z < hi:
+            return name
+    return "unspecified"
+
+
 def _distance_field(shape, spacing, centre_mm) -> np.ndarray:
     grids = np.meshgrid(*[np.arange(s) * sp for s, sp in zip(shape, spacing)],
                         indexing="ij")
@@ -61,35 +88,82 @@ def synth_volume(modality: Modality, lesions_mm, radii_mm,
     return vol, affine
 
 
+
 def write_cohort(root: Path | str, n_patients: int = 20,
-                 max_studies: int = 3, seed: int = 0) -> Path:
-    """Write root/<patient>/<date>/<MODALITY>.nii.gz for a whole cohort."""
+                 max_studies: int = 3, seed: int = 0,
+                 lesion_manifest: Path | str | None = None) -> Path:
+    """Write volumes AND the lesion ground truth that describes them."""
+    import csv
+
     import nibabel as nib
 
     root = Path(root)
     rng = np.random.default_rng(seed)
+    rows: list[dict] = []
     n_studies = 0
 
     for p in range(n_patients):
         patient = f"PAT{p:04d}"
         modalities = PATTERNS[p % len(PATTERNS)]
+        trajectory = TRAJECTORY_NAMES[p % len(TRAJECTORY_NAMES)]
+        factors = TRAJECTORIES[trajectory]
         baseline = date(2024, 1, 15)
-        # A patient's lesions persist across timepoints, drifting and growing.
-        n_lesions = int(rng.integers(1, 4))
-        centres = rng.uniform(20.0, 76.0, (n_lesions, 3))
-        radii = rng.uniform(5.0, 12.0, n_lesions)
 
-        for k in range(int(rng.integers(1, max_studies + 1))):
+
+        n_lesions = int(rng.integers(2, 4))              
+        centres = rng.uniform(25.0, 71.0, (n_lesions, 3))
+        radii = rng.uniform(8.0, 16.0, n_lesions)        
+
+        for k in range(int(rng.integers(3, max_studies + 1))):
             acquired = baseline + timedelta(days=90 * k)
             drift = centres + rng.normal(0.0, 1.5, centres.shape)
-            grown = radii * (1.0 + 0.15 * k)
+            scaled = radii * factors[min(k, len(factors) - 1)]
+
             out_dir = root / patient / acquired.isoformat()
             out_dir.mkdir(parents=True, exist_ok=True)
             for modality in modalities:
-                vol, affine = synth_volume(modality, drift, grown, rng)
+                vol, affine = synth_volume(modality, drift, scaled, rng)
                 nib.save(nib.Nifti1Image(vol, affine),
                          out_dir / f"{modality.value}.nii.gz")
+
+            study_id = f"{patient}_{acquired.isoformat()}"
+            for i, (centre, radius) in enumerate(zip(drift, scaled)):
+                rows.append({
+                    "patient_id": patient, "study_id": study_id,
+                    "trajectory": trajectory, "lesion_id": f"L{i + 1}",
+                    "organ": _region_for(centre),
+                    "longest_diameter_mm": round(float(2.0 * radius), 1),
+                    "centre_x_mm": round(float(centre[0]), 1),
+                    "centre_y_mm": round(float(centre[1]), 1),
+                    "centre_z_mm": round(float(centre[2]), 1),
+                })
             n_studies += 1
 
     log.info("wrote %d studies for %d patients to %s", n_studies, n_patients, root)
+
+    if lesion_manifest:
+        path = Path(lesion_manifest)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        log.info("lesion ground truth: %s (%d lesions)", path, len(rows))
+
     return root
+
+
+def read_lesions(path: Path | str) -> dict[str, list]:
+    """study_id -> [Lesion], the ground truth the reports describe."""
+    import csv
+
+    from panorama.clinical.recist import Lesion
+
+    out: dict[str, list] = {}
+    with Path(path).open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            out.setdefault(row["study_id"], []).append(
+                Lesion(row["lesion_id"], float(row["longest_diameter_mm"]),
+                       row["organ"]))
+    return out
+
