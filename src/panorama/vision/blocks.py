@@ -19,19 +19,20 @@ class Attention(nn.Module):
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.proj = nn.Linear(dim, dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+    def forward(self, x: torch.Tensor,
+                attn_mask: torch.Tensor | None = None) -> torch.Tensor:
         b, n, e = x.shape
         qkv = (self.qkv(x)
                .reshape(b, n, 3, self.num_heads, self.head_dim)
                .permute(2, 0, 3, 1, 4))            # [3, B, H, N, head_dim]
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        # Applies the 1/sqrt(head_dim) scale internally, and dispatches to
-        # Flash Attention on GPU (never materializes the N x N matrix).
         out = F.scaled_dot_product_attention(
-            q, k, v, dropout_p=self.dropout if self.training else 0.0)
+            q, k, v, attn_mask=attn_mask,
+            dropout_p=self.dropout if self.training else 0.0)
 
-        out = out.transpose(1, 2).reshape(b, n, e)  # merge heads
+        out = out.transpose(1, 2).reshape(b, n, e)
         return self.proj(out)
 
 
@@ -61,7 +62,8 @@ class TransformerBlock(nn.Module):
         self.norm2 = nn.LayerNorm(dim)
         self.mlp = Mlp(dim, mlp_ratio, dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x))
+    def forward(self, x: torch.Tensor,
+                attn_mask: torch.Tensor | None = None) -> torch.Tensor:
+        x = x + self.attn(self.norm1(x), attn_mask)
         x = x + self.mlp(self.norm2(x))
         return x

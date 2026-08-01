@@ -31,15 +31,19 @@ class ReportTextEncoder(nn.Module):
 
     def forward(self, token_ids: torch.Tensor,
                 attention_mask: torch.Tensor | None = None) -> torch.Tensor:
+        if attention_mask is None:
+            attention_mask = (token_ids != self.pad_id)
+        keep = attention_mask.bool()
+
+        # SDPA boolean convention: True = attend, False = block.
+        # [B, L] -> [B, 1, 1, L] so every query blocks the same key positions.
+        attn_mask = keep[:, None, None, :]
+
         x = self.token_embed(token_ids) + self.pos_embed[:, :token_ids.shape[1]]
         for block in self.blocks:
-            x = block(x)
+            x = block(x, attn_mask)
         x = self.norm(x)
 
-        if attention_mask is None:
-            attention_mask = (token_ids != self.pad_id).float()
-
-        # Masked mean: padding must not dilute the embedding, or report LENGTH
-        # leaks into the representation.
-        weights = attention_mask.unsqueeze(-1).float()
+        # Masked mean over real tokens only.
+        weights = keep.unsqueeze(-1).float()
         return (x * weights).sum(dim=1) / weights.sum(dim=1).clamp(min=1e-6)
