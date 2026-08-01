@@ -150,3 +150,36 @@ def test_loss_decreases_on_a_fixed_batch():
         if step == 0:
             first = float(loss.detach())
     assert float(loss.detach()) < first
+
+def test_text_encoder_is_length_invariant():
+    """Padding must not reach attention, or report LENGTH leaks into the embedding.
+
+    Length correlates with modality count in our corpus (a CT-only follow-up is
+    shorter than a tri-modal staging report), so an unmasked encoder gives the
+    contrastive model a shortcut that has nothing to do with clinical content.
+    """
+    from panorama.vlm.text_encoder import ReportTextEncoder
+
+    torch.manual_seed(0)
+    enc = ReportTextEncoder(vocab_size=50, embed_dim=32, depth=2, num_heads=4,
+                            max_length=64, pad_id=0).eval()
+    real = torch.randint(3, 50, (1, 12))
+    mask = torch.ones(1, 12, dtype=torch.long)
+
+    with torch.no_grad():
+        trimmed = enc(real, mask)
+        for pad_len in (4, 20, 52):
+            padded_ids = torch.cat([real, torch.zeros(1, pad_len, dtype=torch.long)], 1)
+            padded_mask = torch.cat([mask, torch.zeros(1, pad_len, dtype=torch.long)], 1)
+            assert torch.allclose(enc(padded_ids, padded_mask), trimmed, atol=1e-5), pad_len
+
+
+def test_vision_blocks_unaffected_by_optional_mask():
+    """attn_mask defaults to None; vision behaviour must be byte-identical."""
+    from panorama.vision.blocks import TransformerBlock
+
+    torch.manual_seed(0)
+    block = TransformerBlock(32, 4).eval()
+    x = torch.randn(2, 8, 32)
+    with torch.no_grad():
+        assert torch.equal(block(x), block(x, None))
