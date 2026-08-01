@@ -75,19 +75,23 @@ def render(report: StructuredReport, rng: random.Random | None = None) -> str:
     else:
         lines += ["COMPARISON: none available; this is the baseline study.", ""]
 
+
     lines.append("FINDINGS:")
     for lesion in report.lesions:
         d = lesion.longest_diameter_mm
         if d <= 0:
             lines.append(f"- The previously noted {lesion.organ} lesion has resolved.")
             continue
-        sentence = (f"{pick(LESION_OPENER)} {lesion.organ} lesion "
+        organ = lesion.organ
+        noun = organ if organ.endswith(("node", "mass", "nodule")) else f"{organ} lesion"
+        sentence = (f"{pick(LESION_OPENER)} {noun} "
                     f"{pick(MEASURE_PHRASE).format(d=d)}")
         prior = report.prior_lesion_mm.get(lesion.lesion_id)
         direction = _trend(d, prior)
         if direction:
             sentence += f", {pick(TREND_PHRASE[direction]).format(p=prior)}"
         lines.append(sentence + ".")
+
 
     if report.new_lesion:
         lines.append("- A new lesion is identified, not present on the prior study.")
