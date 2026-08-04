@@ -55,4 +55,9 @@ class ImageReportDataset(Dataset):
         sample["pair_id"] = torch.tensor(self.study_index[study_id], dtype=torch.long)
         sample["response"] = torch.tensor(
             RESPONSE_INDEX[RECISTResponse(record["response"])], dtype=torch.long)
+        # Continuous probe targets -- properties of THIS scan, so a single
+        # timepoint fully determines them (unlike the RECIST category).
+        sample["sld_mm"] = torch.tensor(record["sld_mm"], dtype=torch.float32)
+        sample["n_lesions"] = torch.tensor(float(record["n_lesions"]),
+                                           dtype=torch.float32)
         return sample

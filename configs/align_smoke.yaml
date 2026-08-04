@@ -1,0 +1,46 @@
+# Contrastive image-report alignment on the synthetic cohort, CPU.
+seed: 1337
+output_dir: outputs/align
+pretrained_checkpoint: null      # set from the CLI
+
+data:
+  manifest_path: data/synthetic/manifests/cohort.csv
+  data_root: data/synthetic/raw
+  corpus_path: data/synthetic/manifests/reports.jsonl
+  tokenizer_path: data/synthetic/manifests/tokenizer.json
+  crop_size: [32, 32, 32]
+  target_spacing: [2.0, 2.0, 2.0]
+  max_text_length: 192
+  batch_size: 8
+  num_workers: 0
+  patches_per_study: 4
+  fg_threshold: 0.3
+  val_fraction: 0.2
+  test_fraction: 0.1
+
+model:
+  freeze_vision: true
+  vision_lr_multiplier: 0.1
+  text_dim: 128
+  text_depth: 2
+  text_heads: 8
+  max_text_length: 192
+  projection_dim: 64
+  dropout: 0.1
+  # NOTE: actual lr = base_lr * effective_batch_size / 256. At batch 8 that is
+  # base_lr/32, so this is set high to land near 3e-4 in practice.
+  base_lr: 1.0e-2
+  weight_decay: 0.05
+  warmup_steps: 50
+  max_steps: 1200
+
+trainer:
+  max_steps: 1200
+  accelerator: cpu
+  devices: 1
+  precision: 32
+  accumulate_grad_batches: 1
+  gradient_clip_val: 1.0
+  check_val_every_n_epoch: null   # count val_check_interval in GLOBAL steps
+  val_check_interval: 50
+  log_every_n_steps: 10
