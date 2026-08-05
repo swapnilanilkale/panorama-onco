@@ -152,18 +152,25 @@ def write_cohort(root: Path | str, n_patients: int = 20,
 
     return root
 
-
 def read_lesions(path: Path | str) -> dict[str, list]:
-    """study_id -> [Lesion], the ground truth the reports describe."""
+    """study_id -> [LesionWithLocation], the ground truth the reports describe."""
     import csv
+    from dataclasses import dataclass
 
     from panorama.clinical.recist import Lesion
+
+    @dataclass(frozen=True)
+    class LocatedLesion(Lesion):
+        centre_mm: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     out: dict[str, list] = {}
     with Path(path).open(newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
             out.setdefault(row["study_id"], []).append(
-                Lesion(row["lesion_id"], float(row["longest_diameter_mm"]),
-                       row["organ"]))
+                LocatedLesion(row["lesion_id"], float(row["longest_diameter_mm"]),
+                              row["organ"],
+                              (float(row["centre_x_mm"]), float(row["centre_y_mm"]),
+                               float(row["centre_z_mm"]))))
     return out
+
 

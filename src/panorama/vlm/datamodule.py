@@ -7,6 +7,8 @@ import lightning as L
 import torch
 from torch.utils.data import DataLoader
 
+from panorama.data.synthetic import read_lesions
+
 from panorama.clinical.corpus import read_corpus
 from panorama.core.exceptions import ConfigError
 from panorama.core.logging import get_logger
@@ -17,17 +19,18 @@ from panorama.data.splits import CohortSplit, patient_level_split
 from panorama.vlm.dataset import ImageReportDataset
 from panorama.vlm.tokenizer import ReportTokenizer
 
+
 log = get_logger(__name__)
 
 
 class AlignmentDataModule(L.LightningDataModule):
     """manifest + report corpus -> paired train/val/test loaders."""
-
     def __init__(self,
                  manifest_path: Path | str,
                  data_root: Path | str,
                  corpus_path: Path | str,
                  tokenizer_path: Path | str | None = None,
+                 lesions_path: Path | str | None = None,
                  crop_size: tuple[int, int, int] = DEFAULT_PATCH,
                  target_spacing: tuple[float, float, float] = DEFAULT_SPACING_MM,
                  max_text_length: int = 192,
@@ -43,11 +46,13 @@ class AlignmentDataModule(L.LightningDataModule):
         data_root = str(data_root)
         corpus_path = str(corpus_path)
         tokenizer_path = str(tokenizer_path) if tokenizer_path else None
+        lesions_path = str(lesions_path) if lesions_path else None
         self.save_hyperparameters()
         self.split: CohortSplit | None = None
         self.tokenizer: ReportTokenizer | None = None
         self._datasets: dict[str, ImageReportDataset] = {}
 
+   
     def prepare_data(self) -> None:
         for name in ("manifest_path", "corpus_path"):
             if not Path(self.hparams[name]).is_file():
@@ -77,6 +82,12 @@ class AlignmentDataModule(L.LightningDataModule):
                 self.tokenizer.save(self.hparams.tokenizer_path)
         log.info("tokenizer vocabulary: %d tokens", len(self.tokenizer))
 
+
+        # Lesion world coordinates, for crop-local probe targets. Optional:
+        # the alignment objective itself does not need them.
+        lesions = (read_lesions(self.hparams.lesions_path)
+                   if self.hparams.lesions_path else {})
+
         common = dict(crop_size=self.hparams.crop_size,
                       target_spacing=self.hparams.target_spacing,
                       fg_threshold=self.hparams.fg_threshold,
@@ -84,15 +95,15 @@ class AlignmentDataModule(L.LightningDataModule):
 
         self._datasets = {
             "train": ImageReportDataset(
-                self.split.train, corpus, self.tokenizer,
+                self.split.train, corpus, self.tokenizer, lesions=lesions,
                 patches_per_study=self.hparams.patches_per_study, **common),
-            # ONE crop per study at eval: retrieval is a per-STUDY question,
-            # and duplicate crops would inflate recall.
             "val": ImageReportDataset(self.split.val, corpus, self.tokenizer,
-                                      patches_per_study=1, **common),
+                                      lesions=lesions, patches_per_study=1, **common),
             "test": ImageReportDataset(self.split.test, corpus, self.tokenizer,
-                                       patches_per_study=1, **common),
+                                       lesions=lesions, patches_per_study=1, **common),
         }
+
+
 
     def _loader(self, name: str, shuffle: bool) -> DataLoader:
         nw = self.hparams.num_workers

@@ -94,12 +94,20 @@ def regression_report(train_features: np.ndarray, train_targets: np.ndarray,
         "n_test": len(test_targets),
     }
 
-
 @torch.no_grad()
 def extract_features(encoder, loader, device: str = "cpu"):
-    """Pooled embeddings, RECIST labels, and continuous targets for a loader."""
+    """Per-crop embeddings with every probe target.
+
+    Returns (features, recist_labels, sld_mm, n_lesions,
+             local_lesion_mm, local_in_view, study_ids).
+
+    The last two are CROP-LOCAL: the diameter of the lesion nearest this crop's
+    centre, and whether it falls inside the crop. Unlike the study-level sld_mm,
+    those are determined by what the encoder actually sees.
+    """
     encoder = encoder.to(device).eval()
-    feats, labels, sld, n_les, study_ids = [], [], [], [], []
+    feats, labels, sld, n_les = [], [], [], []
+    local, in_view, study_ids = [], [], []
     for batch in loader:
         _, pooled = encoder(batch["image"].to(device),
                             batch["modality_mask"].to(device))
@@ -107,9 +115,48 @@ def extract_features(encoder, loader, device: str = "cpu"):
         labels.append(batch["response"].numpy())
         sld.append(batch["sld_mm"].numpy())
         n_les.append(batch["n_lesions"].numpy())
+        local.append(batch["local_lesion_mm"].numpy())
+        in_view.append(batch["local_in_view"].numpy())
         study_ids.extend(batch["study_id"])
     return (np.concatenate(feats), np.concatenate(labels),
-            np.concatenate(sld), np.concatenate(n_les), study_ids)
+            np.concatenate(sld), np.concatenate(n_les),
+            np.concatenate(local), np.concatenate(in_view), study_ids)
+
+@torch.no_grad()
+def extract_study_features(encoder, loader, pooling: str = "sum",
+                           device: str = "cpu"):
+    """Pool multiple crops per study into one study-level feature.
+
+    A single 64mm crop sees roughly one lesion, so it cannot determine a
+    study-level property like total tumour burden. Summing the per-crop
+    embeddings matches how the SLD is built (a sum over lesions); mean pooling
+    discards that scale and only works when lesion count is near-constant.
+    """
+    if pooling not in ("sum", "mean"):
+        raise ValueError(f"pooling must be 'sum' or 'mean', got {pooling!r}")
+
+    encoder = encoder.to(device).eval()
+    by_study: dict[str, list[np.ndarray]] = {}
+    meta: dict[str, tuple] = {}
+
+    for batch in loader:
+        _, pooled = encoder(batch["image"].to(device),
+                            batch["modality_mask"].to(device))
+        pooled = pooled.cpu().numpy()
+        for i, study_id in enumerate(batch["study_id"]):
+            by_study.setdefault(study_id, []).append(pooled[i])
+            meta[study_id] = (int(batch["response"][i]),
+                              float(batch["sld_mm"][i]),
+                              float(batch["n_lesions"][i]))
+
+    ids = sorted(by_study)
+    reduce = np.sum if pooling == "sum" else np.mean
+    feats = np.stack([reduce(by_study[s], axis=0) for s in ids])
+    labels = np.array([meta[s][0] for s in ids])
+    sld = np.array([meta[s][1] for s in ids], dtype=np.float32)
+    n_les = np.array([meta[s][2] for s in ids], dtype=np.float32)
+    n_crops = np.array([len(by_study[s]) for s in ids])
+    return feats, labels, sld, n_les, ids, n_crops
 
 
 def probe_report(train_features: np.ndarray, train_labels: np.ndarray,
