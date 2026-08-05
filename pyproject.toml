@@ -10,6 +10,7 @@ dependencies = [
     "scipy>=1.11",
     "torch>=2.3",
     "omegaconf>=2.3",
+    "pydicom>=2.4",
 ]
 [project.optional-dependencies]
 dev = ["pytest>=8.2"]
