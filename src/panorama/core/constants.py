@@ -29,4 +29,5 @@ class IntensityNorm:
     CT_HU_WINDOW = (-1000.0, 400.0)     # CT: calibrated Hounsfield Units
     MRI_CLIP_PERCENTILES = (0.5, 99.5)  # MRI: no fixed units -> z-score
     PET_SUV_CLIP = (0.0, 25.0)          # PET -> SUV (metabolic activity)
+    PET_SUV_SUSPICIOUS = 2.5            # common reference for hypermetabolism
 
