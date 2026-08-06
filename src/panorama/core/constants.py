@@ -28,6 +28,11 @@ RECIST_PD_ABSOLUTE_MM = 5.0        # ...and must ALSO be >= 5 mm absolute
 class IntensityNorm:
     CT_HU_WINDOW = (-1000.0, 400.0)     # CT: calibrated Hounsfield Units
     MRI_CLIP_PERCENTILES = (0.5, 99.5)  # MRI: no fixed units -> z-score
-    PET_SUV_CLIP = (0.0, 25.0)          # PET -> SUV (metabolic activity)
+    # SUV clip. The diagnostic range for FDG PET is roughly 0-10: normal liver
+    # sits at 2-3, suspicious uptake above 2.5, and only brain and bladder
+    # exceed 10. Clipping at 25 squeezes all of that into the bottom 10% of the
+    # normalised range; clipping at 10 spans it fully and saturates only the
+    # rare voxels that carry no tumour information.
+    PET_SUV_CLIP = (0.0, 10.0)
     PET_SUV_SUSPICIOUS = 2.5            # common reference for hypermetabolism
 

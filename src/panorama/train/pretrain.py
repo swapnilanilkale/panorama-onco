@@ -45,12 +45,20 @@ def validate_config(cfg: DictConfig) -> None:
             f"data.crop_size {list(cfg.data.crop_size)} != model.volume_shape "
             f"{list(cfg.model.volume_shape)}: the encoder would compute the wrong "
             f"token count.")
+    interval = cfg.trainer.get("val_check_interval")
+    if interval is not None and cfg.trainer.get("check_val_every_n_epoch", 1) is not None:
+        raise ConfigError(
+            f"trainer.val_check_interval={interval} is counted in WITHIN-EPOCH "
+            f"batches unless trainer.check_val_every_n_epoch is null. Set it to "
+            f"null to count global steps, or Lightning will reject any interval "
+            f"larger than one epoch.")
     for name in ("base_lr", "weight_decay"):
         value = cfg.model[name]
         if not isinstance(value, (int, float)):
             raise ConfigError(
                 f"model.{name} is {value!r} ({type(value).__name__}), not a number. "
-                f"In YAML write 1.5e-4 (with a decimal point), never 3e-4.")
+                f"In YAML write 1.5e-4 (with a decimal point), never a quoted string.")
+   
 
 def run(cfg: DictConfig) -> Path:
     from datetime import datetime

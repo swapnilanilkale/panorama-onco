@@ -1,0 +1,48 @@
+# MAE pretraining on real QIN-BREAST PET/CT.
+# Identical model to pretrain_smoke.yaml so results are comparable; only the
+# data source, spacing and foreground threshold differ.
+seed: 1337
+output_dir: outputs/qin
+
+data:
+  manifest_path: data/tcia/manifests/qin-breast.csv
+  data_root: data/tcia/qin-breast-nifti
+  crop_size: [32, 32, 32]
+  target_spacing: [2.0, 2.0, 2.0]
+  batch_size: 2
+  num_workers: 0
+  patches_per_study: 4
+  # 0.5 in the normalised HU window sits between lung (~0.21) and soft
+  # tissue (~0.74), so crops centre on body rather than lung or air.
+  fg_threshold: 0.5
+  val_fraction: 0.2
+  test_fraction: 0.1
+
+model:
+  volume_shape: [32, 32, 32]
+  patch_size: 8
+  embed_dim: 128
+  depth: 4
+  num_heads: 8
+  fusion_every: 2
+  share_stream_weights: true
+  mask_ratio: 0.75
+  decoder_dim: 128
+  decoder_depth: 2
+  decoder_heads: 4
+  norm_pix_loss: true
+  base_lr: 1.0e-3
+  weight_decay: 0.05
+  warmup_steps: 100
+  max_steps: 3000
+
+trainer:
+  max_steps: 3000
+  accelerator: cpu
+  devices: 1
+  precision: 32
+  accumulate_grad_batches: 1
+  gradient_clip_val: 1.0
+  check_val_every_n_epoch: null   # count val_check_interval in GLOBAL steps
+  val_check_interval: 100
+  log_every_n_steps: 20

@@ -4,6 +4,7 @@ import numpy as np
 
 from panorama.core.constants import Modality
 from panorama.data.volume import MedicalVolume
+from panorama.core.exceptions import MissingModalityError
 
 DEFAULT_PATCH = (96, 96, 96)
 
@@ -54,16 +55,28 @@ def crop_around_world_point(volume: MedicalVolume, centre_world: np.ndarray,
 def sample_study_patch(volumes: dict[Modality, MedicalVolume],
                        rng: np.random.Generator,
                        patch_size=DEFAULT_PATCH,
-                       fg_threshold: float | None = None
+                       fg_threshold: float | None = None,
+                       reference: Modality | None = None
                        ) -> tuple[dict[Modality, np.ndarray], np.ndarray]:
     """Sample ONE physical location and crop every stream around it.
 
-    This is ADR-0003 in code: the streams are aligned by *world coordinates*,
-    not by voxel index -- so they never need to share a grid.
+    The crop centre is chosen from a REFERENCE modality. This must be explicit:
+    `fg_threshold` is calibrated against one modality's normalised range, and
+    silently using whichever stream came first in the dict makes foreground
+    sampling depend on insertion order.
     """
-    reference = next(iter(volumes.values()))
-    centre_vox = sample_center_voxel(reference.array, rng, fg_threshold)
-    centre_world = voxel_to_world(reference.affine, centre_vox)
+    if reference is not None and reference in volumes:
+        ref_volume = volumes[reference]
+    else:
+        # Prefer CT: its fixed HU window gives a stable, scanner-independent
+        # scale for the threshold. Fall back to whatever is present.
+        ref_volume = next((volumes[m] for m in Modality.imaging_streams()
+                           if m in volumes), None)
+        if ref_volume is None:
+            raise MissingModalityError("study has no imaging streams to sample from")
+
+    centre_vox = sample_center_voxel(ref_volume.array, rng, fg_threshold)
+    centre_world = voxel_to_world(ref_volume.affine, centre_vox)
     patches = {m: crop_around_world_point(v, centre_world, patch_size)
                for m, v in volumes.items()}
     return patches, centre_world

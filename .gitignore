@@ -218,8 +218,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 # --- PANORAMA: generated data and run artifacts (reproducible, never committed) ---
-data/
-outputs/
+/data/
+/outputs/
 *.nii
 *.nii.gz
 *.ckpt
