@@ -33,11 +33,11 @@ model:
   norm_pix_loss: true
   base_lr: 1.0e-3
   weight_decay: 0.05
-  warmup_steps: 100
-  max_steps: 3000
+  warmup_steps: 200
+  max_steps: 6000
 
 trainer:
-  max_steps: 3000
+  max_steps: 6000
   accelerator: cpu
   devices: 1
   precision: 32

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from collections import OrderedDict
 
 import numpy as np
 import torch
@@ -31,21 +32,29 @@ class MultiModalPatchDataset(Dataset):
     """Yields one multi-modal 3D patch per index, as model-ready tensors."""
     def __init__(self,
                  studies: Sequence[Study],
-                 crop_size=DEFAULT_PATCH,                # was: patch_size
+                 crop_size=DEFAULT_PATCH,
                  target_spacing=DEFAULT_SPACING_MM,
                  fg_threshold: float | None = None,
                  patches_per_study: int = 1,
                  seed: int = 1337,
-                 cache_volumes: bool = True) -> None:
+                 cache_volumes: bool = True,
+                 cache_size: int = 16) -> None:
         self.studies = list(studies)
-        self.crop_size = tuple(crop_size)               # was: self.patch_size
+        self.crop_size = tuple(crop_size)
         self.target_spacing = tuple(target_spacing)
         self.fg_threshold = fg_threshold
         self.patches_per_study = patches_per_study
         self.seed = seed
         self.epoch = 0
-        self._cache: dict[str, dict] | None = {} if cache_volumes else None
+        self.cache_size = cache_size
+        # OrderedDict as an LRU: a whole-body study is ~130 MB preprocessed, so
+        # an unbounded cache would grow to ~10 GB over an epoch. Bounding it
+        # keeps the reuse that matters (consecutive crops of the same study)
+        # without the memory.
+        self._cache: OrderedDict[str, dict] | None = (
+            OrderedDict() if cache_volumes else None)
 
+    
     def __len__(self) -> int:
         return len(self.studies) * self.patches_per_study
 
@@ -55,11 +64,14 @@ class MultiModalPatchDataset(Dataset):
 
     def _volumes(self, study: Study) -> dict:
         if self._cache is not None and study.study_id in self._cache:
+            self._cache.move_to_end(study.study_id)     # mark as recently used
             return self._cache[study.study_id]
         vols = {m: preprocess(load_nifti(p, m), self.target_spacing)
                 for m, p in study.volumes.items()}
         if self._cache is not None:
             self._cache[study.study_id] = vols
+            while len(self._cache) > self.cache_size:
+                self._cache.popitem(last=False)          # evict least recent
         return vols
 
     def __getitem__(self, idx: int) -> dict:
