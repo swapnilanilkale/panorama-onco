@@ -225,3 +225,5 @@ __marimo__/
 *.ckpt
 *.pt
 *.safetensors
+# Scratch verification scripts -- promote to scripts/ or tests/ if worth keeping
+/try_*.py
