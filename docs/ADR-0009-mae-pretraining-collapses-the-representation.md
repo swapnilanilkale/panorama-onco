@@ -29,27 +29,41 @@ input mean linearly recoverable by construction, so any encoder solves it.
 The 0.40 gap between CT-alone and CT+PET confirms the probe is discriminating,
 not saturated.
 
-## Finding
-Pretraining shows no transfer, and the pretrained representation has FEWER
-effective dimensions than random initialisation. MAE reconstruction at this
-scale (73 train studies, 41 epochs) appears to reward encoding a few dominant
-modes -- body position, tissue/air, gross intensity -- and discarding the
-detail downstream tasks need.
+## Finding (revised 2026-08-24)
 
-This explains the ADR-0007 nulls mechanistically: the benchmarks were adequate;
-the representation was impoverished.
+An initial reading attributed the null transfer to representation collapse
+(effective rank 7 vs 10). Logging rank DURING training falsified that: rank held
+at 9-10 from step 99 to 1999 while loss improved monotonically. The two rank
+figures were also measured at different sample ceilings (84 vs 21) and are not
+comparable.
+
+The actual finding is simpler and more serious. Validation variance explained is
+**0.005** against a training value of 0.068:
+
+| step | val loss | val variance explained |
+|---|---|---|
+| 99 | 1.2066 | -0.2066 |
+| 999 | 1.0008 | -0.0008 |
+| 1999 | 0.9950 | 0.0050 |
+
+The model takes ~1100 steps merely to beat the trivial predictor on held-out
+data, and ends barely above it. MAE pretraining at this scale does not learn
+generalisable structure. A frozen encoder that has learned nothing performs like
+a random one because it functionally is one.
+
+## Consequences (revised)
+- Aim 1's representation claim is not supported, and the reason is
+  under-learning, not collapse.
+- Report VALIDATION variance explained, never training. The earlier figure of
+  0.230 was training-only and measured memorisation over 41 epochs.
+- Candidate causes, in order of likelihood: model capacity (2.3M parameters,
+  4 layers, 128 dims is very small for volumetric data); cohort size (73 train
+  studies); crop size (32^3 at 2mm sees 64mm of a 700mm field of view, so most
+  crops contain little structure to reconstruct).
+- The methodological lesson is general: a metric that is only logged at the end
+  of training cannot distinguish "never learned" from "learned then lost".
 
 ## Caveat
 R^2 0.46 from CT alone may largely reflect anatomical LOCATION (brain and
 bladder are always hot, lung always cold) rather than lesion-level
 structure-to-metabolism inference. Testing that requires region-matched crops.
-
-## Consequences
-- Aim 1's representation claim is NOT supported at this scale. Do not report
-  pretraining benefit.
-- Candidate causes to test next: model capacity (2.3M params is very small),
-  cohort size (73 studies), and the masking ratio. Representation collapse
-  under reconstruction objectives is a known failure mode addressed in the
-  literature by contrastive or distillation auxiliaries.
-- Effective rank should be logged during pretraining, not only after. A metric
-  that reveals collapse mid-run is worth more than one discovered at evaluation.

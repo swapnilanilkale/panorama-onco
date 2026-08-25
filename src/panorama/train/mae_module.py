@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import math
 
 import lightning as L
@@ -11,6 +12,23 @@ from panorama.vision.mae import MultiModalMAE
 # These carry signal that weight decay would erode toward zero.
 NO_DECAY_NAMES = ("pos_embed", "modality_embed", "missing_token", "mask_token")
 
+def effective_rank(features: np.ndarray, threshold: float = 0.95) -> int:
+    """Number of principal directions holding `threshold` of the variance.
+
+    A representation that collapses to a handful of dimensions cannot support
+    downstream tasks however low its reconstruction loss. Note the measure is
+    capped at min(n_samples, n_dims), so it must be computed over an accumulated
+    set of embeddings -- at batch_size=2 a per-batch value could never exceed 2.
+    """
+    if features.shape[0] < 2:
+        return 0
+    centred = features - features.mean(axis=0, keepdims=True)
+    centred = centred / (centred.std(axis=0, keepdims=True) + 1e-8)
+    variance = np.linalg.svd(centred, compute_uv=False) ** 2
+    total = variance.sum()
+    if total <= 0:
+        return 0
+    return int((np.cumsum(variance) / total < threshold).sum()) + 1
 
 class MAEPretrainModule(L.LightningModule):
     """Self-supervised pretraining of the Aim 1 encoder."""
@@ -36,6 +54,9 @@ class MAEPretrainModule(L.LightningModule):
                  min_lr_ratio: float = 0.0) -> None:
         super().__init__()
         self.save_hyperparameters()      # checkpoints then carry their own config
+                # Pooled embeddings accumulated over a validation epoch, for the
+        # effective-rank diagnostic.
+        self._val_pooled: list[np.ndarray] = []
 
         encoder = MultiStreamViT(
             volume_shape=volume_shape, patch_size=patch_size, embed_dim=embed_dim,
@@ -52,19 +73,19 @@ class MAEPretrainModule(L.LightningModule):
         out = self.model(batch["image"], batch["modality_mask"])
         loss = out["loss"]
         n = batch["image"].shape[0]
-        # With norm_pix_loss the trivial predictor (patch mean) scores MSE 1.0,
-        # so 1 - loss reads like R^2: 0 = learned nothing, 1 = perfect,
-        # negative = worse than a constant.
-        if self.hparams.norm_pix_loss:
-            self.log(f"{stage}/variance_explained", 1.0 - loss,
-                     prog_bar=(stage == "train"), on_step=False,
-                     on_epoch=True, batch_size=n)
         self.log(f"{stage}/loss", loss, prog_bar=(stage == "train"),
                  on_step=(stage == "train"), on_epoch=True, batch_size=n)
         self.log(f"{stage}/masked_tokens",
                  out["token_mask"].float().sum() / n,
                  on_step=False, on_epoch=True, batch_size=n)
+        if self.hparams.norm_pix_loss:
+            self.log(f"{stage}/variance_explained", 1.0 - loss,
+                     prog_bar=(stage == "train"), on_step=False,
+                     on_epoch=True, batch_size=n)
+        if stage == "val":
+            self._val_pooled.append(out["pooled"].detach().cpu().numpy())
         return loss
+
 
     def training_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
         return self._step(batch, "train")
@@ -78,6 +99,25 @@ class MAEPretrainModule(L.LightningModule):
         ds = getattr(ds, "dataset", None)
         if hasattr(ds, "set_epoch"):
             ds.set_epoch(self.current_epoch)
+
+    def on_validation_epoch_end(self) -> None:
+        """Effective rank of the pooled representation.
+
+        Reconstruction loss can improve while the feature space narrows, so the
+        MAE objective alone does not reveal collapse. Logging rank per epoch
+        turns "pretraining did not help" into "pretraining collapsed at step N",
+        which is a far more actionable statement.
+        """
+        if not self._val_pooled:
+            return
+        pooled = np.concatenate(self._val_pooled)
+        self._val_pooled.clear()
+        rank = effective_rank(pooled)
+        self.log("val/effective_rank", float(rank))
+        # The ceiling is min(n_samples, embed_dim); log it so a low rank is not
+        # misread when the val set is small.
+        self.log("val/rank_ceiling", float(min(pooled.shape)))
+        self.log("val/rank_fraction", rank / max(1, min(pooled.shape)))
 
     # ------------------------------------------------------------- optimizer
 
