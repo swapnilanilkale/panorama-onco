@@ -1,0 +1,46 @@
+# Aim 2: structured report generation on the synthetic cohort (ADR-0010).
+seed: 1337
+output_dir: outputs/report
+pretrained_checkpoint: null
+
+data:
+  manifest_path: data/synthetic/manifests/cohort.csv
+  data_root: data/synthetic/raw
+  lesions_path: data/synthetic/manifests/lesions.csv
+  crop_size: [32, 32, 32]
+  target_spacing: [2.0, 2.0, 2.0]
+  batch_size: 8
+  num_workers: 0
+  patches_per_study: 4
+  fg_threshold: 0.3
+  max_lesions: 4
+  val_fraction: 0.2
+  test_fraction: 0.1
+
+model:
+  freeze_vision: false          # true gives the random-frozen control arm
+  volume_shape: [32, 32, 32]
+  patch_size: 8
+  embed_dim: 128
+  depth: 4
+  num_heads: 8
+  fusion_every: 2
+  max_lesions: 4
+  head_hidden: 256
+  dropout: 0.1
+  base_lr: 3.0e-2               # scaled by batch/256, so ~9.4e-4 in practice
+  vision_lr_multiplier: 1.0
+  weight_decay: 0.05
+  warmup_steps: 100
+  max_steps: 3000
+
+trainer:
+  max_steps: 3000
+  accelerator: cpu
+  devices: 1
+  precision: 32
+  accumulate_grad_batches: 1
+  gradient_clip_val: 1.0
+  check_val_every_n_epoch: null
+  val_check_interval: 100
+  log_every_n_steps: 20

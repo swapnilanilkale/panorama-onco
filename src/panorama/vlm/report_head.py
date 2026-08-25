@@ -54,6 +54,11 @@ class StructuredReportHead(nn.Module):
 
         self.lesion_count = nn.Linear(hidden, max_lesions + 1)   # 0..max
         self.diameters = nn.Linear(hidden, max_lesions)          # mm, per slot
+        # Per-lesion change from the prior study, signed (no softplus -- lesions
+        # shrink as well as grow). This target is NOT computable from the current
+        # scan alone, so a model that ignores the prior cannot fit it. That is
+        # the point: predicting absolute diameters gave the prior no work to do.
+        self.diameter_change = nn.Linear(hidden, max_lesions)
         self.organs = nn.Linear(hidden, max_lesions * n_organs)
         self.new_lesion = nn.Linear(hidden, 1)                   # logit
 
@@ -74,32 +79,49 @@ class StructuredReportHead(nn.Module):
             # softplus keeps diameters positive without saturating: a lesion
             # cannot have negative size, and ReLU would kill gradients at 0.
             "diameters_mm": nn.functional.softplus(self.diameters(features)),
+            "diameter_change_mm": self.diameter_change(features),
             "organ_logits": self.organs(features).view(b, self.max_lesions,
                                                        self.n_organs),
             "new_lesion_logit": self.new_lesion(features).squeeze(-1),
         }
 
 
-def report_loss(prediction: dict, target: dict) -> dict:
-    """Sum of per-field losses, with diameters scored on PRESENT lesions only.
+def report_loss(prediction: dict, target: dict,
+                change_weight: float = 1.0,
+                consistency_weight: float = 0.5) -> dict:
+    """Per-field losses, scored on PRESENT lesions only.
 
-    Scoring an empty lesion slot would train the model to predict a diameter for
-    a lesion that does not exist -- the same class of error as scoring absent
-    modalities in the MAE loss (M2.7).
+    Two diameter terms:
+      * absolute -- what the current scan shows
+      * change   -- current minus prior, which requires BOTH inputs
+
+    Plus a consistency penalty tying them together: (d_cur - delta) should equal
+    the prior's diameter. Without it the two heads can disagree, and a model
+    whose own outputs are mutually contradictory is exactly what structured
+    generation exists to prevent.
     """
     count_loss = nn.functional.cross_entropy(
         prediction["lesion_count_logits"], target["lesion_count"])
 
-    # [B, max_lesions] mask: slot i is real iff i < lesion_count
     b, max_lesions = prediction["diameters_mm"].shape
     slots = torch.arange(max_lesions, device=prediction["diameters_mm"].device)
     present = (slots.unsqueeze(0) < target["lesion_count"].unsqueeze(1)).float()
     n_present = present.sum().clamp(min=1.0)
 
-    # L1 on diameters: robust to the occasional large lesion, and the units are
-    # millimetres so the loss is directly interpretable.
     diameter_loss = ((prediction["diameters_mm"] - target["diameters_mm"]).abs()
                      * present).sum() / n_present
+
+    # Change is only defined where a prior exists.
+    has_prior = target["prior_present"].view(-1, 1)
+    change_mask = present * has_prior
+    n_change = change_mask.sum().clamp(min=1.0)
+    change_loss = ((prediction["diameter_change_mm"]
+                    - target["diameter_change_mm"]).abs()
+                   * change_mask).sum() / n_change
+
+    implied_prior = prediction["diameters_mm"] - prediction["diameter_change_mm"]
+    consistency = ((implied_prior - target["prior_diameters_mm"]).abs()
+                   * change_mask).sum() / n_change
 
     organ_loss = (nn.functional.cross_entropy(
         prediction["organ_logits"].reshape(b * max_lesions, -1),
@@ -109,6 +131,16 @@ def report_loss(prediction: dict, target: dict) -> dict:
     new_lesion_loss = nn.functional.binary_cross_entropy_with_logits(
         prediction["new_lesion_logit"], target["new_lesion"])
 
-    total = count_loss + diameter_loss / 10.0 + organ_loss + new_lesion_loss
-    return {"loss": total, "count": count_loss, "diameter_mae_mm": diameter_loss,
+    # Millimetre terms are divided by 10 to sit on the same scale as the
+    # cross-entropy terms. This weighting is a hyperparameter, not a truth.
+    total = (count_loss
+             + diameter_loss / 10.0
+             + change_weight * change_loss / 10.0
+             + consistency_weight * consistency / 10.0
+             + organ_loss
+             + new_lesion_loss)
+    return {"loss": total, "count": count_loss,
+            "diameter_mae_mm": diameter_loss,
+            "change_mae_mm": change_loss,
+            "consistency_mm": consistency,
             "organ": organ_loss, "new_lesion": new_lesion_loss}

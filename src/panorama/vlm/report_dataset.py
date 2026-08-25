@@ -52,14 +52,34 @@ class StudyPairDataset(Dataset):
         # never span splits (they cannot -- splits are patient-level -- but
         # building here keeps the invariant local and obvious).
         self.examples: list[tuple[Study, Study | None, dict]] = []
+
+
         for timeline in build_timelines(known):
             course = assess_course([
                 TimepointAssessment(s.study_id, lesions_by_study[s.study_id])
                 for s in timeline.studies])
+            baseline_sld = course[0].sld_mm
+            previous_targets: dict | None = None
             for i, (study, assessment) in enumerate(zip(timeline.studies, course)):
                 prior = timeline.studies[i - 1] if i > 0 else None
-                self.examples.append((study, prior, self._targets(assessment)))
-
+                nadir_sld = min(tp.sld_mm for tp in course[:i + 1])
+                targets = self._targets(assessment, baseline_sld, nadir_sld)
+                # Per-lesion change requires the PRIOR timepoint's diameters.
+                # Lesion identity is stable across timepoints in this cohort by
+                # construction; on real data, matching lesions across studies is
+                # itself a hard problem (see ADR-0010).
+                if previous_targets is None:
+                    targets["prior_diameters_mm"] = np.zeros(
+                        self.max_lesions, dtype=np.float32)
+                    targets["diameter_change_mm"] = np.zeros(
+                        self.max_lesions, dtype=np.float32)
+                else:
+                    targets["prior_diameters_mm"] = previous_targets["diameters_mm"]
+                    targets["diameter_change_mm"] = (
+                        targets["diameters_mm"] - previous_targets["diameters_mm"])
+                self.examples.append((study, prior, targets))
+                previous_targets = targets
+        
         n_baseline = sum(1 for _, prior, _ in self.examples if prior is None)
         log.info("%d examples (%d baselines, %d with prior) from %d studies",
                  len(self.examples), n_baseline,
@@ -68,7 +88,8 @@ class StudyPairDataset(Dataset):
         self.patches = MultiModalPatchDataset(known, **patch_kwargs)
         self.study_row = {s.study_id: i for i, s in enumerate(known)}
 
-    def _targets(self, assessment: TimepointAssessment) -> dict:
+    def _targets(self, assessment: TimepointAssessment,
+                 baseline_sld: float, nadir_sld: float) -> dict:
         lesions = assessment.lesions[:self.max_lesions]
         diameters = np.zeros(self.max_lesions, dtype=np.float32)
         organs = np.zeros(self.max_lesions, dtype=np.int64)
@@ -80,11 +101,14 @@ class StudyPairDataset(Dataset):
             "diameters_mm": diameters,
             "organs": organs,
             "new_lesion": float(assessment.new_lesion),
-            # Derived from the WHOLE course by assess_course, so the nadir is
-            # the true running minimum.
             "response": RESPONSE_INDEX[assessment.response],
             "sld_mm": float(assessment.sld_mm),
+            # Carried so evaluation can DERIVE RECIST from predicted diameters
+            # using the same rule that produced the target.
+            "baseline_sld_mm": baseline_sld,
+            "nadir_sld_mm": nadir_sld,
         }
+
 
     def __len__(self) -> int:
         return len(self.examples)
@@ -130,4 +154,8 @@ class StudyPairDataset(Dataset):
         sample["new_lesion"] = torch.tensor(targets["new_lesion"])
         sample["response"] = torch.tensor(targets["response"], dtype=torch.long)
         sample["sld_mm"] = torch.tensor(targets["sld_mm"])
+        sample["baseline_sld_mm"] = torch.tensor(targets["baseline_sld_mm"])
+        sample["nadir_sld_mm"] = torch.tensor(targets["nadir_sld_mm"])
+        sample["prior_diameters_mm"] = torch.from_numpy(targets["prior_diameters_mm"])
+        sample["diameter_change_mm"] = torch.from_numpy(targets["diameter_change_mm"])
         return sample
