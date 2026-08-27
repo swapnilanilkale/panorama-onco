@@ -110,11 +110,16 @@ def main() -> None:
 
     downloaded = skipped = 0
     for i, (pid, series) in enumerate(plan, start=1):
+
         for s in sorted(series, key=lambda x: (x["StudyDate"], x.get("SeriesNumber", 0))):
             date = s["StudyDate"][:10]
-            # Layout: <patient>/<date>/<MODALITY>/  -- one series per directory,
-            # which is what the DICOM reader and series selector expect.
-            out_dir = root / pid / date / s["Modality"]
+            # Layout: <patient>/<date>/<MODALITY>_<SeriesNumber>/
+            # A study can contain SEVERAL series of the same modality -- HCC-TACE-Seg
+            # has both "PRE LIVER" and "Recon 2: LIVER 3 PHASE" as CT. Keying the
+            # directory on modality alone makes them collide, and the completion
+            # marker then hides the loss.
+            number = s.get("SeriesNumber", 0)
+            out_dir = root / pid / date / f"{s['Modality']}_{number}"
             if download_series(s["SeriesInstanceUID"], out_dir):
                 downloaded += 1
                 log.info("[%d/%d] %s %s %s (%d images)", i, len(plan), pid, date,
