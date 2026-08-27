@@ -21,6 +21,28 @@ log = get_logger(__name__)
 # Fraction of the median gap by which slice spacing may vary before we refuse.
 MAX_SPACING_IRREGULARITY = 0.05
 
+def split_acquisitions(paths: Sequence[Path | str]) -> dict[str, list[Path]]:
+    """Group files by AcquisitionNumber.
+
+    A single DICOM series can contain several acquisitions at the SAME spatial
+    positions -- a multiphase contrast CT stores arterial and portal-venous
+    phases together, giving two files per slice. Building one volume from them
+    interleaves anatomically incoherent slices, and the spacing check sees gaps
+    of zero.
+
+    Which phase matters clinically: HCC is characterised by arterial
+    hyperenhancement and portal-venous washout, so the phases are not
+    interchangeable.
+    """
+    import pydicom
+
+    groups: dict[str, list[Path]] = {}
+    for path in paths:
+        ds = pydicom.dcmread(str(path), stop_before_pixels=True)
+        key = str(getattr(ds, "AcquisitionNumber", "1") or "1")
+        groups.setdefault(key, []).append(Path(path))
+    return {k: sorted(v) for k, v in sorted(groups.items())}
+
 def read_series(paths: Sequence[Path | str],
                 modality: Modality,
                 allow_irregular: bool = False,
@@ -42,6 +64,8 @@ def read_series(paths: Sequence[Path | str],
             raise DataIngestionError(f"{path!r} has no ImagePositionPatient")
         slices.append(ds)
 
+
+
     # Direction cosines: rows and columns of the image plane. The slice axis is
     # their cross product -- DICOM does not store it.
     iop = np.asarray(slices[0].ImageOrientationPatient, dtype=float)
@@ -56,6 +80,24 @@ def read_series(paths: Sequence[Path | str],
 
     slices.sort(key=depth)
     depths = np.array([depth(s) for s in slices])
+
+    slices.sort(key=depth)
+    depths = np.array([depth(s) for s in slices])
+
+    # Duplicate positions mean several acquisitions are packed into one series.
+    unique_depths = np.unique(np.round(depths, 3))
+    if len(unique_depths) < len(depths):
+        raise DataIngestionError(
+            f"series has {len(depths)} slices at only {len(unique_depths)} "
+            f"distinct positions -- it likely contains multiple acquisitions "
+            f"(e.g. contrast phases). Split with `split_acquisitions` and read "
+            f"each separately.")
+
+    if len(slices) < 2:
+        raise DataIngestionError(f"series has only {len(slices)} slice(s)")
+
+    gaps = np.diff(depths)
+    dz = float(np.median(gaps))
 
     if len(slices) < 2:
         raise DataIngestionError(f"series has only {len(slices)} slice(s)")

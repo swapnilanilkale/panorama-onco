@@ -144,3 +144,21 @@ def longest_axial_diameter_mm(mask: np.ndarray,
 def mask_volume_ml(mask: np.ndarray, volume: MedicalVolume) -> float:
     """Segmented volume in millilitres (1 mL = 1000 mm^3)."""
     return float(mask.sum()) * volume.voxel_volume_mm3 / 1000.0
+
+def is_measurable_lesion(mass: np.ndarray, organ: np.ndarray | None = None,
+                         max_organ_fraction: float = 1.0) -> tuple[bool, str]:
+    """Reject annotations that are not measurable target lesions.
+
+    RECIST 1.1 excludes non-measurable disease. A `Mass` segmentation larger
+    than the organ containing it describes diffuse or multifocal involvement,
+    not a discrete lesion whose longest diameter means anything -- observed in
+    1 of 5 HCC-TACE-Seg patients (ADR-0012).
+    """
+    if not mass.any():
+        return False, "mask is empty"
+    if organ is not None and organ.any():
+        fraction = float(mass.sum()) / float(organ.sum())
+        if fraction > max_organ_fraction:
+            return False, (f"mass is {fraction:.2f}x the organ volume -- "
+                           f"diffuse involvement, not a measurable lesion")
+    return True, "measurable"
