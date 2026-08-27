@@ -8,6 +8,9 @@ rather than assumptions -- and the download cost is known in advance.
 """
 from __future__ import annotations
 
+import random
+import time
+
 import argparse
 import collections
 
@@ -16,11 +19,18 @@ import requests
 BASE = "https://services.cancerimagingarchive.net/nbia-api/services/v1"
 
 
-def get(endpoint: str, **params) -> list[dict]:
-    response = requests.get(f"{BASE}/{endpoint}", params=params, timeout=60)
-    response.raise_for_status()
-    return response.json()
-
+def get(endpoint: str, attempts: int = 4, **params) -> list[dict]:
+    """TCIA drops connections under sustained querying -- retry with backoff."""
+    for attempt in range(attempts):
+        try:
+            response = requests.get(f"{BASE}/{endpoint}", params=params, timeout=120)
+            response.raise_for_status()
+            return response.json()
+        except (requests.RequestException, OSError):
+            if attempt == attempts - 1:
+                raise
+            wait = min(30.0, 3.0 * 2 ** attempt) * (0.5 + random.random() * 0.5)
+            time.sleep(wait)
 
 def main() -> None:
     parser = argparse.ArgumentParser()
