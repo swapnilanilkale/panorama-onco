@@ -1,11 +1,14 @@
 """Convert downloaded DICOM series to the NIfTI layout `scan_directory` reads.
 
-    data/tcia/qin-breast/<patient>/<date>/CT/*.dcm      (input, from download)
+    data/tcia/qin-breast/<patient>/<date>/CT_2/*.dcm        (input, from download)
     data/tcia/qin-breast-nifti/<patient>/<date>/CT.nii.gz   (output)
 
+Input directories are named <MODALITY>_<SeriesNumber> since M1.22, because a
+study can contain several series of one modality and keying on modality alone
+made them collide.
+
 Conversion happens ONCE, to disk. The alternative -- parsing 83 DICOM files per
-study on every epoch -- would make the DataLoader the bottleneck and leave the
-GPU idle.
+study on every epoch -- would make the DataLoader the bottleneck.
 
     python scripts/convert_dicom.py
 """
@@ -29,10 +32,20 @@ log = get_logger(__name__)
 DICOM_TO_MODALITY = {"CT": Modality.CT, "PT": Modality.PET, "MR": Modality.MRI}
 
 
+def modality_prefix(directory: Path) -> str | None:
+    """'CT_2' -> 'CT'. Returns None for directories we do not handle."""
+    prefix = directory.name.split("_")[0]
+    return prefix if prefix in DICOM_TO_MODALITY else None
+
+
 def convert_series(series_dir: Path, out_path: Path,
                    allow_irregular: bool = False) -> dict:
     """Read one DICOM series and write it as NIfTI, verifying the geometry."""
-    modality = DICOM_TO_MODALITY[series_dir.name]
+    prefix = modality_prefix(series_dir)
+    if prefix is None:
+        raise DataIngestionError(f"unrecognised modality directory: {series_dir}")
+    modality = DICOM_TO_MODALITY[prefix]
+
     files = sorted(series_dir.glob("*.dcm"))
     if not files:
         raise DataIngestionError(f"no DICOM files in {series_dir}")
@@ -77,20 +90,33 @@ def main() -> None:
     configure_logging("INFO")
 
     series_dirs = sorted(p for p in args.src.rglob("*")
-                         if p.is_dir() and p.name in DICOM_TO_MODALITY
+                         if p.is_dir() and modality_prefix(p)
                          and list(p.glob("*.dcm")))
     log.info("%d series to convert", len(series_dirs))
 
     converted = skipped = 0
     failures: list[tuple[Path, str]] = []
+    collisions: list[tuple[Path, Path]] = []
     stats: dict[str, list] = collections.defaultdict(list)
+    claimed: dict[Path, Path] = {}
 
     for series_dir in series_dirs:
-        # <patient>/<date>/<MODALITY>  ->  <patient>/<date>/<MODALITY>.nii.gz
         date_dir = series_dir.parent
         patient_dir = date_dir.parent
-        out_path = (args.out / patient_dir.name / date_dir.name
-                    / f"{series_dir.name if series_dir.name != 'PT' else 'PET'}.nii.gz")
+        prefix = modality_prefix(series_dir)
+        name = "PET" if prefix == "PT" else prefix
+        out_path = args.out / patient_dir.name / date_dir.name / f"{name}.nii.gz"
+
+        # Several series of one modality in a study would map to the same file.
+        # QIN-BREAST has exactly one per modality; collections like HCC-TACE-Seg
+        # do not, so report rather than silently overwrite.
+        if out_path in claimed:
+            collisions.append((series_dir, claimed[out_path]))
+            log.warning("COLLISION %s and %s both map to %s -- keeping the first",
+                        series_dir.relative_to(args.src),
+                        claimed[out_path].relative_to(args.src), out_path.name)
+            continue
+        claimed[out_path] = series_dir
 
         if out_path.exists() and not args.overwrite:
             skipped += 1
@@ -110,8 +136,8 @@ def main() -> None:
                  info["shape"], info["spacing"], info["extent"],
                  *info["range"], info["mb"])
 
-    log.info("converted %d, skipped %d already present, %d failed",
-             converted, skipped, len(failures))
+    log.info("converted %d, skipped %d already present, %d failed, %d collisions",
+             converted, skipped, len(failures), len(collisions))
     for path, why in failures:
         log.info("  failed: %s -- %s", path, why)
 
