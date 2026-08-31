@@ -23,13 +23,15 @@ def stack_modalities(patches: dict[Modality, np.ndarray],
     mask = np.zeros(len(streams), dtype=np.float32)
     for i, m in enumerate(streams):
         if m in patches:
-            image[i] = patches[m]
+            # Precomputed volumes are stored float16 to halve disk; the model
+            # trains in float32 (or AMP handles the cast on GPU).
+            image[i] = patches[m].astype(np.float32)
             mask[i] = 1.0
     return image, mask
 
-
 class MultiModalPatchDataset(Dataset):
     """Yields one multi-modal 3D patch per index, as model-ready tensors."""
+
     def __init__(self,
                  studies: Sequence[Study],
                  crop_size=DEFAULT_PATCH,
@@ -38,7 +40,8 @@ class MultiModalPatchDataset(Dataset):
                  patches_per_study: int = 1,
                  seed: int = 1337,
                  cache_volumes: bool = True,
-                 cache_size: int = 16) -> None:
+                 cache_size: int = 16,
+                 precomputed_root: str | None = None) -> None:
         self.studies = list(studies)
         self.crop_size = tuple(crop_size)
         self.target_spacing = tuple(target_spacing)
@@ -47,6 +50,7 @@ class MultiModalPatchDataset(Dataset):
         self.seed = seed
         self.epoch = 0
         self.cache_size = cache_size
+        self.precomputed_root = precomputed_root
         # OrderedDict as an LRU: a whole-body study is ~130 MB preprocessed, so
         # an unbounded cache would grow to ~10 GB over an epoch. Bounding it
         # keeps the reuse that matters (consecutive crops of the same study)
@@ -64,15 +68,25 @@ class MultiModalPatchDataset(Dataset):
 
     def _volumes(self, study: Study) -> dict:
         if self._cache is not None and study.study_id in self._cache:
-            self._cache.move_to_end(study.study_id)     # mark as recently used
+            self._cache.move_to_end(study.study_id)
             return self._cache[study.study_id]
+
+        if self.precomputed_root is not None:
+            from panorama.data.precomputed import load_precomputed
+            # Memory-mapped: no decode, no resample, and NOT cached -- the OS
+            # page cache already does that job better than an LRU of 65 MB
+            # arrays would.
+            return {m: load_precomputed(self.precomputed_root, study, m)
+                    for m in study.volumes}
+
         vols = {m: preprocess(load_nifti(p, m), self.target_spacing)
                 for m, p in study.volumes.items()}
         if self._cache is not None:
             self._cache[study.study_id] = vols
             while len(self._cache) > self.cache_size:
-                self._cache.popitem(last=False)          # evict least recent
+                self._cache.popitem(last=False)
         return vols
+
 
     def __getitem__(self, idx: int) -> dict:
         study = self.studies[idx // self.patches_per_study]

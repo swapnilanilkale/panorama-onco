@@ -32,13 +32,14 @@ class PanoramaDataModule(L.LightningDataModule):
                  val_fraction: float = 0.15,
                  test_fraction: float = 0.15,
                  seed: int = 1337,
-                 split_file: Path | str | None = None) -> None:
+                 split_file: Path | str | None = None,
+                 precomputed_root: Path | str | None = None) -> None:
         super().__init__()
-        # Store paths as STRINGS: keeps checkpoints loadable with the safe
-        # weights_only=True default, and portable between Windows and Linux.
         manifest_path = str(manifest_path)
         data_root = str(data_root)
         split_file = str(split_file) if split_file is not None else None
+        precomputed_root = (str(precomputed_root)
+                            if precomputed_root is not None else None)
         self.save_hyperparameters()
         self.split: CohortSplit | None = None
         self._datasets: dict[str, MultiModalPatchDataset] = {}
@@ -72,9 +73,10 @@ class PanoramaDataModule(L.LightningDataModule):
             seed=self.hparams.seed)
         log.info("cohort split:\n%s", self.split.summary())
 
-        common = dict(crop_size=self.hparams.crop_size,               
+        common = dict(crop_size=self.hparams.crop_size,
                       target_spacing=self.hparams.target_spacing,
-                      seed=self.hparams.seed)
+                      seed=self.hparams.seed,
+                      precomputed_root=self.hparams.precomputed_root)
 
         
         
