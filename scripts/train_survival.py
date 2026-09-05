@@ -29,82 +29,9 @@ from panorama.survival.embeddings import load_embeddings
 from panorama.survival.synthetic import simulate_outcomes
 from panorama.survival.timeline import TimelineEncoder
 from panorama.utils.reproducibility import git_revision, seed_everything
+from panorama.survival.train import forward, train
 
 log = get_logger(__name__)
-
-
-def forward(model: TimelineEncoder, cohort: TimelineCohort,
-            baseline_only: bool) -> torch.Tensor:
-    if baseline_only:
-        # Control arm: the first study only, elapsed time zeroed. Same
-        # architecture and parameter count, no temporal information.
-        return model(cohort.embeddings[:, :1],
-                     torch.zeros_like(cohort.days[:, :1]),
-                     torch.ones_like(cohort.mask[:, :1]))
-    return model(cohort.embeddings, cohort.days, cohort.mask)
-
-
-def train(train_cohort: TimelineCohort, val_cohort: TimelineCohort,
-          baseline_only: bool, steps: int, lr: float, weight_decay: float,
-          warmup: int, patience: int, seed: int) -> dict:
-    seed_everything(seed)
-    model = TimelineEncoder(embed_dim=train_cohort.embed_dim, hidden_dim=64,
-                            depth=2, num_heads=4, dropout=0.1)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr,
-                                  weight_decay=weight_decay)
-
-    def factor(step: int) -> float:
-        if step < warmup:
-            return (step + 1) / max(1, warmup)
-        progress = min(1.0, (step - warmup) / max(1, steps - warmup))
-        return 0.5 * (1 + math.cos(math.pi * progress))
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
-
-    history, best = [], {"c_index": -1.0, "step": -1, "state": None}
-    since_best = 0
-
-    for step in range(steps):
-        model.train()
-        optimizer.zero_grad()
-        loss = cox_partial_likelihood_loss(
-            forward(model, train_cohort, baseline_only),
-            train_cohort.duration, train_cohort.event)
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
-
-        if step % 10 == 0 or step == steps - 1:
-            model.eval()
-            with torch.no_grad():
-                train_c = concordance_index(
-                    forward(model, train_cohort, baseline_only).numpy(),
-                    train_cohort.duration.numpy(), train_cohort.event.numpy())
-                val_result = concordance_index(
-                    forward(model, val_cohort, baseline_only).numpy(),
-                    val_cohort.duration.numpy(), val_cohort.event.numpy())
-            history.append({"step": step, "loss": float(loss.detach()),
-                            "train_c": train_c["c_index"],
-                            "val_c": val_result["c_index"]})
-
-            # Select on VALIDATION concordance. Training C-index reaches 0.99
-            # while validation peaks near 0.64 -- 140 patients and ~77 events
-            # cannot support 108K parameters without heavy overfitting.
-            if val_result["c_index"] > best["c_index"]:
-                best = {"c_index": val_result["c_index"], "step": step,
-                        "state": {k: v.clone() for k, v in model.state_dict().items()},
-                        "comparable_pairs": val_result["comparable_pairs"]}
-                since_best = 0
-            else:
-                since_best += 1
-                if since_best >= patience:
-                    log.info("early stop at step %d (no improvement for %d checks)",
-                             step, patience)
-                    break
-
-    model.load_state_dict(best["state"])
-    return {"model": model, "best": best, "history": history}
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
