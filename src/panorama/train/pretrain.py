@@ -99,8 +99,18 @@ def run(cfg: DictConfig) -> Path:
                         save_last=True, auto_insert_metric_name=False),
         LearningRateMonitor(logging_interval="step"),
     ]
-    trainer = L.Trainer(default_root_dir=out_dir, callbacks=callbacks,
-                        **OmegaConf.to_container(cfg.trainer, resolve=True))
+
+    from lightning.pytorch.loggers import CSVLogger
+
+    trainer = L.Trainer(
+        default_root_dir=out_dir,
+        # Explicit CSVLogger: the default logger depends on tensorboard being
+        # installed, and when it is not, metrics are silently not written --
+        # training and validation both run, but nothing is recorded.
+        logger=CSVLogger(save_dir=str(out_dir), name="lightning_logs"),
+        callbacks=callbacks,
+        **OmegaConf.to_container(cfg.trainer, resolve=True))
+
     trainer.fit(module, datamodule=datamodule)
     return out_dir
 
