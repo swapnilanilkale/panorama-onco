@@ -76,7 +76,7 @@ docs/_build/
 target/
 
 # Jupyter Notebook
-.ipynb_checkpoints
+.ipynb_checkpoints/
 
 # IPython
 profile_default/
@@ -227,3 +227,5 @@ __marimo__/
 *.safetensors
 # Scratch verification scripts -- promote to scripts/ or tests/ if worth keeping
 /try_*.py
+# Kaggle dataset staging
+/kaggle-upload/

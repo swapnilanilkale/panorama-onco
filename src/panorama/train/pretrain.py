@@ -45,13 +45,21 @@ def validate_config(cfg: DictConfig) -> None:
             f"data.crop_size {list(cfg.data.crop_size)} != model.volume_shape "
             f"{list(cfg.model.volume_shape)}: the encoder would compute the wrong "
             f"token count.")
+
     interval = cfg.trainer.get("val_check_interval")
-    if interval is not None and cfg.trainer.get("check_val_every_n_epoch", 1) is not None:
+    every_n_epoch = cfg.trainer.get("check_val_every_n_epoch", 1)
+    # A FLOAT is a fraction of an epoch and is always valid. An INTEGER counts
+    # batches within an epoch unless check_val_every_n_epoch is null, in which
+    # case it counts global steps -- and Lightning rejects an integer larger
+    # than the epoch length.
+    if isinstance(interval, int) and not isinstance(interval, bool) \
+            and every_n_epoch is not None:
         raise ConfigError(
-            f"trainer.val_check_interval={interval} is counted in WITHIN-EPOCH "
-            f"batches unless trainer.check_val_every_n_epoch is null. Set it to "
-            f"null to count global steps, or Lightning will reject any interval "
-            f"larger than one epoch.")
+            f"trainer.val_check_interval={interval} is an integer, counted in "
+            f"WITHIN-EPOCH batches unless trainer.check_val_every_n_epoch is "
+            f"null. Set it to null to count global steps, or use a float "
+            f"(e.g. 1.0) meaning 'once per epoch'.")
+    
     for name in ("base_lr", "weight_decay"):
         value = cfg.model[name]
         if not isinstance(value, (int, float)):

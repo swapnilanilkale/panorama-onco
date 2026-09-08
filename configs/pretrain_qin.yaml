@@ -43,6 +43,10 @@ trainer:
   precision: 32
   accumulate_grad_batches: 1
   gradient_clip_val: 1.0
-  check_val_every_n_epoch: null   # count val_check_interval in GLOBAL steps
-  val_check_interval: 100
+  check_val_every_n_epoch: 1
+  val_check_interval: 1.0
   log_every_n_steps: 20
+  # Float = fraction of an epoch. Robust to epoch length changing with batch
+  # size or device count; an integer interval silently stops firing when the
+  # epoch gets shorter (as it did at 12 batches on two GPUs).
+  

@@ -23,7 +23,13 @@ with round-trip geometry verification. 94 tests, 14 ADRs.
 
 ## 2. Results WITH uncertainty quantification
 
-### Temporal ablations (ADR-0014) -- 20 seeds, paired by initialisation
+### 2.1 Temporal ablations (ADR-0014) -- 20 seeds, paired by initialisation
+
+| arm | C-index | sd |
+|---|---|---|
+| correct chronology | 0.6515 | 0.0207 |
+| shuffled chronology | 0.6475 | 0.0202 |
+| ordinal positions (1, 2, 3 instead of elapsed days) | 0.6204 | 0.0189 |
 
 | comparison | difference | 95% CI | permutation p |
 |---|---|---|---|
@@ -35,17 +41,43 @@ with round-trip geometry verification. 94 tests, 14 ADRs.
 visit indices by 0.031 C-index, independently of sequence order.
 
 **Refuted claim:** that the model learns disease evolution as an ordered
-process. Shuffling each patient's studies costs nothing measurable. The
-architecture is permutation-invariant by construction -- elapsed days are
-concatenated per study and pooling is a masked mean -- so order enters nowhere.
+process. Shuffling each patient's studies costs nothing measurable (positive in
+only 12 of 20 seeds). The architecture is permutation-invariant by construction
+-- elapsed days are concatenated per study and pooling is a masked mean -- so
+order enters nowhere.
 
-### Cox implementation correctness (ADR-0014)
+Decomposing the +0.132 gain over a single scan: elapsed-time encoding accounts
+for +0.031 (24%), sequence order for +0.004 (3%).
+
+The benchmark can detect order-blindness: an order-invariant proxy for growth
+(max/min burden) correlates -0.133 with the true growth ratio, so ordering
+cannot be recovered from the set of embeddings alone.
+
+### 2.2 Timeline versus single-scan (ADR-0014) -- patient-level bootstrap, 4000 replicates
+
+| comparison | difference | 95% CI | bootstrap p |
+|---|---|---|---|
+| full timeline vs single-scan control | **+0.1865** | **[+0.0300, +0.3446]** | **0.022** |
+
+Point estimates: full timeline 0.7061, single-scan control 0.5196, oracle (true
+simulated risk) 0.8168.
+
+The control uses an identical architecture and parameter count, sees only the
+baseline study with elapsed time zeroed, never improved on its initialisation,
+and early-stopped after 150 steps.
+
+The interval is wide because the validation split has 60 patients and 36 events.
+Resampling is at the PATIENT level: the C-index is computed over 1,201
+comparable pairs, but pairs sharing a patient are not independent, and
+resampling pairs would give an interval roughly 4.5x too narrow.
+
+### 2.3 Cox implementation correctness (ADR-0014)
 
 Fitted coefficients [0.741, -0.497, 0.289] against a simulated truth of
 [0.8, -0.5, 0.3], with all five distractor coefficients under 0.05. Fitted
 C-index 0.7333 against the true hazard's 0.7330 -- the model recovers
-essentially all available signal. Validation impossible on real data, where the
-true hazard is unobservable.
+essentially all available signal. This validation is impossible on real data,
+where the true hazard is unobservable.
 
 ## 3. Results WITHOUT uncertainty quantification
 
@@ -59,15 +91,13 @@ be treated as measurements until bootstrapped.
 | Crop-local R^2, pretrained vs scratch | 0.3917 / 0.3429 | 250 | ~0.12 |
 | Peak-PET R^2, pretrained vs scratch | 0.4628 / 0.4517 | 84 | ~0.20 |
 | RECIST balanced accuracy, tuned vs frozen | 0.6154 / 0.5926 | 141 | unknown |
-| Timeline vs single-scan C-index | 0.7061 / 0.5196 | 60 | ~0.05 |
+| Aim 2 prior-ablation, change MAE | 3.34 -> 3.86 mm | 141 | unknown |
 
 The Aim 1 pretrained-versus-scratch gaps (0.049 and 0.011) sit well inside their
 estimated intervals. The null conclusion is very likely correct, but **without
 the interval it is an assertion rather than a measurement.** Bootstrapping these
-is the highest-priority outstanding work.
-
-The timeline-versus-single-scan gap (+0.187) is roughly 4x its estimated sd and
-is unlikely to be noise, but should be bootstrapped for the same reason.
+is the highest-priority outstanding work, because they are the basis for the
+project's central negative findings (ADR-0007, ADR-0009).
 
 ## 4. Negative controls and methodological findings
 
@@ -78,7 +108,9 @@ wrong, with the control that caught it.
 Seven measurements across four task types, with an architecturally identical
 random-weight control. Diagnosed as under-learning, not representation
 collapse: validation variance explained 0.005 against training 0.068, and
-effective rank held at 9-10 throughout training rather than falling.
+effective rank held at 9-10 throughout training rather than falling. An initial
+collapse hypothesis was falsified by logging rank DURING training rather than
+only at the end.
 
 **A probe target must be determined by the input.** The RECIST-category probe
 was underspecified -- progression is defined by change between timepoints and
@@ -102,9 +134,13 @@ preserves enough structure to solve the probe tasks. Four independent
 evaluations gave the same answer for trained and untrained encoders (ADR-0007).
 
 **A metric can report a confident constant.** A LightningModule reported val
-C-index 0.4667 for two architecturally different arms across every check, over a
-cohort with a different comparable-pair count than the script's. A direct
-training loop on the same data gave 0.706 and 0.520 (ADR-0014).
+C-index 0.4667 for two architecturally different arms across every validation
+check, over a cohort with 585 comparable pairs where the script's own cohort had
+1,201. A direct training loop on the same data gave 0.706 and 0.520 (ADR-0014).
+
+**A confidence interval must resample the independent unit.** Resampling the
+1,201 comparable pairs rather than the 60 patients gives an interval 4.5x too
+narrow, because pairs sharing a patient are not independent.
 
 **Generated artifacts must not be versioned.** Committing synthetic cohorts grew
 the repository to 2.38 GiB and made `git push` fail; history rewriting recovered
@@ -118,43 +154,55 @@ patient weight, injected dose, and decay correction; omitting decay inflates
 every SUV by ~1.8x at a typical 95-minute uptake delay, and variably so, making
 scan timing a confound. Verified against normal liver at SUV 2.6.
 
-**Slice spacing must be derived, not read.** CT `SliceThickness` said 3.75 mm
-where the true derived spacing was 3.27 mm.
+**Slice spacing must be derived, not read.** CT `SliceThickness` reported
+3.75 mm where the true derived spacing was 3.27 mm.
 
 **A DICOM series may contain several acquisitions.** HCC-TACE-Seg's multiphase
-CTs hold two contrast phases at identical positions; read as one volume they
-interleave anatomically incoherent slices.
+CTs hold two contrast phases at identical slice positions; read as one volume
+they interleave anatomically incoherent slices. Detected by duplicate positions
+and split on `AcquisitionNumber`.
+
+**Series must be resolved by UID, not by description.** In HCC-TACE-Seg the
+segmentation's referenced CT is `Recon 2` for two patients, `Recon 3` for
+another, and an unnumbered series for a fourth. A description-based rule would
+have selected the wrong series for two of five patients.
 
 **Longitudinal annotated data is scarce.** A survey of all 156 TCIA collections
 found 47 with SEG or RTSTRUCT. Of the two inspected in detail: ISPY1's
 segmentation is a 70%-threshold enhancement map with empty structured reports,
 and HCC-TACE-Seg has expert multi-structure contours but only at baseline
 (25 of 25 sampled patients have exactly one SEG). No collection with imaging
-AND time-to-event outcomes was found.
+AND time-to-event outcomes was found (ADR-0012, ADR-0013).
 
 ## 6. Honest scope
 
-- **Aim 1's representation claim is not supported** at the scale tested. A
-  184M-parameter run is in progress; ADR-0009 predicts capacity as the most
-  likely cause.
-- **Aim 2's generation is demonstrated on synthetic imaging only.** Real-data
-  work validates measurement (HCC-TACE-Seg expert contours), not change or
-  RECIST derivation.
+- **Aim 1's representation claim is not supported** at the scale tested
+  (2.3M parameters). A 184M-parameter run is in progress; ADR-0009 identifies
+  capacity as the most likely cause.
+- **Aim 2's generation is demonstrated on synthetic imaging only** (ADR-0010).
+  Real-data work validates lesion MEASUREMENT against expert contours
+  (HCC-TACE-Seg), not change tracking or RECIST derivation.
 - **Aim 3 has no real-data component.** Outcomes are simulated because no
-  suitable cohort exists in the archives surveyed.
+  cohort with imaging and time-to-event data was found in the archives surveyed.
 - **No medical LLM is integrated.** The report system predicts structured fields
-  and renders deterministically -- defensible, but not the brief's "align visual
-  tokens with a medical LLM".
-- **The MRI stream is untested on real data**, because no collection surveyed
+  and renders deterministically -- defensible, since a language model can emit a
+  fluent wrong measurement and this structurally cannot -- but it is not the
+  brief's "align visual tokens with a medical LLM".
+- **The MRI stream is untested on real data**, because no surveyed collection
   has same-date tri-modal studies.
+- **Aim 2's synthetic benchmark carries a confound**: lesion size and trajectory
+  are entangled by construction (corr 0.634), so change is partly inferable from
+  the current scan alone (ADR-0011).
 
 ## 7. Outstanding work, in priority order
 
-1. Bootstrap confidence intervals on every result in section 3.
-2. Architecture ablation: does the transformer beat a per-study MLP with masked
-   mean pooling, given the task is permutation-invariant?
+1. Bootstrap confidence intervals on every result in section 3, particularly the
+   Aim 1 pretrained-versus-scratch comparisons that underpin ADR-0007 and
+   ADR-0009.
+2. Architecture ablation: given the task is permutation-invariant, does the
+   transformer beat a per-study MLP with masked mean pooling?
 3. Capacity experiment at 184M parameters (in progress) -- determines whether
-   Aim 1's null is a scale artefact.
+   Aim 1's null is a scale artefact or a method finding.
 4. Real time-to-event cohort. TCGA-linked TCIA collections carry `days_to_death`
    and `vital_status`; this is the binding constraint on any clinical claim.
 5. Medical LLM integration for Aim 2.
