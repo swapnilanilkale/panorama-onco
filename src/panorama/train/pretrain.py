@@ -6,6 +6,7 @@ from pathlib import Path
 import lightning as L
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from omegaconf import DictConfig, OmegaConf
+from lightning.pytorch.loggers import CSVLogger
 
 from panorama.core.exceptions import ConfigError
 from panorama.core.logging import configure_logging, get_logger
