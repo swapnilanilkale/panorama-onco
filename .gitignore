@@ -229,3 +229,5 @@ __marimo__/
 /try_*.py
 # Kaggle dataset staging
 /kaggle-upload/
+
+/checkpoints/
