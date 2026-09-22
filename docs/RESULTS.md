@@ -104,13 +104,26 @@ project's central negative findings (ADR-0007, ADR-0009).
 The distinctive contribution. Each is a way a plausible-looking result can be
 wrong, with the control that caught it.
 
-**Self-supervised pretraining tied random initialisation** (ADR-0007, ADR-0009).
-Seven measurements across four task types, with an architecturally identical
-random-weight control. Diagnosed as under-learning, not representation
-collapse: validation variance explained 0.005 against training 0.068, and
-effective rank held at 9-10 throughout training rather than falling. An initial
-collapse hypothesis was falsified by logging rank DURING training rather than
-only at the end.
+**A null result survived every control and was still an artefact** (ADR-0009).
+MAE pretraining tied random initialisation across seven measurements and four
+evaluation-task redesigns. Two probe targets were discarded for being
+underspecified or trivially recoverable; a shuffle control confirmed retrieval
+was genuinely multimodal; an architecturally matched random-weight arm was used
+throughout. Every control was correct.
+
+The finding was nonetheless wrong. At 2.3M parameters, validation variance
+explained was 0.005; at 184M, on identical data, objective, schedule and split,
+it is **0.135** -- a 27-fold difference, converged over 82 validation checks.
+The comparison had been between two representations that had both learned
+almost nothing.
+
+> Negative controls establish that an evaluation is capable of detecting a
+> difference. They say nothing about whether the system was configured to
+> produce one.
+
+Effective rank behaves differently at scale: flat at 9-10 throughout training at
+2.3M, but dropping 10 -> 4 in the first 150 steps at 184M and recovering to 6 --
+compression that coincides with learning rather than with failure.
 
 **A probe target must be determined by the input.** The RECIST-category probe
 was underspecified -- progression is defined by change between timepoints and
@@ -176,9 +189,14 @@ AND time-to-event outcomes was found (ADR-0012, ADR-0013).
 
 ## 6. Honest scope
 
-- **Aim 1's representation claim is not supported** at the scale tested
-  (2.3M parameters). A 184M-parameter run is in progress; ADR-0009 identifies
-  capacity as the most likely cause.
+- **Aim 1's representation claim is supported at 184M parameters** and was not
+  at 2.3M (ADR-0009). Validation variance explained 0.135 vs 0.005. Caveats:
+  one seed, and Lightning used both T4s despite `devices: 1`, so the effective
+  batch was 16 against the baseline's 8.
+- **All downstream comparisons predate this checkpoint** and are being rerun.
+  The Aim 1 probes, Aim 2's tuned-vs-frozen arms, and Aim 3's embedding quality
+  (burden recovery R^2 0.373, which bounded the achievable C-index at 0.659)
+  were computed with the 2.3M encoder.
 - **Aim 2's generation is demonstrated on synthetic imaging only** (ADR-0010).
   Real-data work validates lesion MEASUREMENT against expert contours
   (HCC-TACE-Seg), not change tracking or RECIST derivation.
@@ -196,13 +214,14 @@ AND time-to-event outcomes was found (ADR-0012, ADR-0013).
 
 ## 7. Outstanding work, in priority order
 
-1. Bootstrap confidence intervals on every result in section 3, particularly the
-   Aim 1 pretrained-versus-scratch comparisons that underpin ADR-0007 and
-   ADR-0009.
-2. Architecture ablation: given the task is permutation-invariant, does the
-   transformer beat a per-study MLP with masked mean pooling?
-3. Capacity experiment at 184M parameters (in progress) -- determines whether
-   Aim 1's null is a scale artefact or a method finding.
-4. Real time-to-event cohort. TCGA-linked TCIA collections carry `days_to_death`
-   and `vital_status`; this is the binding constraint on any clinical claim.
-5. Medical LLM integration for Aim 2.
+1. Rerun all downstream evaluations with the 184M checkpoint. Aim 1 probes
+   first -- `scripts/ablate_pretraining.py` already exists and takes a
+   `--checkpoint` argument.
+2. Recompute Aim 3's embedding cache and achievable ceiling. Better embeddings
+   should raise the 0.659 bound toward the 0.8168 oracle.
+3. Bootstrap confidence intervals on whatever the rerun produces. Section 3's
+   estimates are superseded, not fixed.
+4. A second seed at 184M, to make the capacity result a measurement.
+5. Real time-to-event cohort -- still the binding constraint on any clinical
+   claim.
+6. Medical LLM integration for Aim 2.
